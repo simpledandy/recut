@@ -104,3 +104,8 @@ export async function POST(req: Request) {
     return new NextResponse(JSON.stringify({ error: "server error" }), { status: 500 });
   }
 }
+
+// Simple GET health-check to confirm the route is deployed on Vercel
+export async function GET() {
+  return NextResponse.json({ ok: true, route: "/api/trim", note: "POST only for trimming; GET is a health-check" });
+}
