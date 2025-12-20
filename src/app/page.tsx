@@ -24,7 +24,41 @@ export default function Home() {
     return /\.(mp4|webm|ogg|mov)(\?|$)/i.test(u);
   }
 
+  function getYouTubeId(u: string) {
+    const m = u.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/);
+    return m ? m[1] : null;
+  }
+
+  const isYouTube = /youtube\.com|youtu\.be/.test(url);
+  const ytId = isYouTube ? getYouTubeId(url) : null;
+  const youtubeThumbnail = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
+
   const previewSrc = url && isDirectVideo(url) ? url : sampleVideo;
+
+  const canPlay = !isYouTube && !!previewSrc;
+  const canServerExport = !!url;
+  const canExport = canPlay && (typeof HTMLVideoElement !== "undefined") && typeof (HTMLVideoElement.prototype as any).captureStream !== "undefined";
+
+  const btnBase = (enabled = true) => ({
+    padding: "10px 14px",
+    borderRadius: 10,
+    border: "1px solid #ddd",
+    background: enabled ? "white" : "#f5f5f5",
+    color: enabled ? "#111" : "#888",
+    cursor: enabled ? "pointer" : "default",
+    opacity: enabled ? 1 : 0.7,
+  });
+
+  const smallBtn = (enabled = true) => ({
+    padding: "6px 10px",
+    borderRadius: 8,
+    border: "1px solid #ddd",
+    background: enabled ? "white" : "#f5f5f5",
+    color: enabled ? "#111" : "#888",
+    cursor: enabled ? "pointer" : "default",
+    opacity: enabled ? 1 : 0.7,
+    marginRight: 8,
+  });
 
   async function analyze() {
     setError(null);
@@ -168,18 +202,7 @@ export default function Home() {
           }}
         />
 
-        <button
-          disabled={loading}
-          style={{
-            marginTop: 12,
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid #ddd",
-            background: loading ? "#fafafa" : "white",
-            cursor: loading ? "default" : "pointer",
-          }}
-          onClick={analyze}
-        >
+        <button disabled={loading} style={{ ...btnBase(!loading), marginTop: 12 }} onClick={analyze}>
           {loading ? "Analyzing..." : "Analyze"}
         </button>
       </div>
@@ -192,13 +215,19 @@ export default function Home() {
         <section style={{ marginTop: 26 }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 14, color: "#444", marginBottom: 6 }}>Preview player</div>
-            <video
-              ref={videoRef}
-              src={previewSrc}
-              crossOrigin="anonymous"
-              controls
-              style={{ width: "100%", borderRadius: 10, background: "#000" }}
-            />
+            {isYouTube && youtubeThumbnail ? (
+              <div style={{ position: "relative" }}>
+                <img src={youtubeThumbnail} alt="YouTube preview" style={{ width: "100%", borderRadius: 10, objectFit: "cover" }} />
+              </div>
+            ) : (
+              <video
+                ref={videoRef}
+                src={previewSrc}
+                crossOrigin="anonymous"
+                controls
+                style={{ width: "100%", borderRadius: 10, background: "#000" }}
+              />
+            )}
           </div>
           <h2 style={{ fontSize: 20, margin: "6px 0 12px" }}>Suggested Clips</h2>
           <div style={{ display: "grid", gap: 14 }}>
@@ -211,12 +240,23 @@ export default function Home() {
                     {formatTime(c.start)} — {formatTime(c.end)} ({c.end - c.start}s)
                   </div>
                   <div style={{ marginTop: 10 }}>
-                    <a href={url || "#"} target="_blank" rel="noreferrer" style={{ marginRight: 12 }}>Open source</a>
-                    <button onClick={() => playClip(c)} style={{ padding: "6px 10px", borderRadius: 8, marginRight: 8 }}>Play clip</button>
-                    <button onClick={() => exportClip(c)} disabled={!!exporting} style={{ padding: "6px 10px", borderRadius: 8, marginRight: 8 }}>
+                    {canServerExport ? (
+                      <a href={url} target="_blank" rel="noreferrer" style={{ marginRight: 12 }}>Open source</a>
+                    ) : (
+                      <span style={{ marginRight: 12, color: "#999" }}>Open source</span>
+                    )}
+
+                    <button onClick={() => playClip(c)} disabled={!canPlay} style={smallBtn(canPlay)}>
+                      Play clip
+                    </button>
+
+                    <button onClick={() => exportClip(c)} disabled={!canExport || !!exporting} style={smallBtn(!(!canExport || !!exporting))}>
                       {exporting === c.id ? "Exporting…" : "Export"}
                     </button>
-                    <button onClick={() => serverExportClip(c)} style={{ padding: "6px 10px", borderRadius: 8 }}>Server Export</button>
+
+                    <button onClick={() => serverExportClip(c)} disabled={!canServerExport} style={smallBtn(!!canServerExport)}>
+                      Server Export
+                    </button>
                   </div>
                 </div>
               </div>

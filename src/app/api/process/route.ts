@@ -16,6 +16,11 @@ export async function POST(req: Request) {
     // Simple heuristic: return different mock clips if youtube link
     const isYoutube = /youtube\.com|youtu\.be/.test(url);
 
+    function getYouTubeId(u: string) {
+      const m = u.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/);
+      return m ? m[1] : null;
+    }
+
     const baseClips = isYoutube
       ? [
           { id: "c1", title: "Key insight: Definition", start: 30, end: 48 },
@@ -28,7 +33,14 @@ export async function POST(req: Request) {
           { id: "c3", title: "Conclusion", start: 240, end: 260 },
         ];
 
-    const clips = baseClips.map((c) => ({ ...c, thumbnail: placeholder(c.title) }));
+    const ytId = isYoutube ? getYouTubeId(url) : null;
+    const clips = baseClips.map((c) => {
+      if (ytId) {
+        // Use YouTube hosted thumbnail for YouTube sources
+        return { ...c, thumbnail: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` };
+      }
+      return { ...c, thumbnail: placeholder(c.title) };
+    });
 
     return NextResponse.json({ clips });
   } catch (err) {
