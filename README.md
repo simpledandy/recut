@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿Recut  repurpose long lessons into short clips
 
-## Getting Started
+Recut helps educators and experts turn long-form lesson videos into short-form clips (YouTube Shorts, Instagram Reels, TikTok) with minimal manual work. Upload or link a video and Recut will automatically identify promising moments and produce trimmed MP4s ready for sharing.
 
-First, run the development server:
+Status: Prototype (alpha)
+- Core flows implemented in a minimal Next.js prototype.
+- Clip suggestion is currently heuristic / mock-driven; transcript-based suggestions are planned.
+- Trimming works via ffmpeg (and yt-dlp for YouTube sources) when available on the host.
+
+Key features
+- Analyze a source video or YouTube link and return suggested short clips with thumbnails.
+- Trim a selected moment into an MP4 for direct download.
+- Health endpoint to check availability of ffmpeg and yt-dlp.
+
+Quickstart (developer)
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Run the dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+API endpoints (overview)
+- POST /api/process  analyze a video URL and return suggested clips.
+  - Payload: { "url": "<video-or-youtube-link>" }
+  - Response: { "clips": [ { "id", "title", "start", "end", "thumbnail" }, ... ] }
+- POST /api/trim  produce a trimmed MP4 clip.
+  - Payload: { "url": "<video-or-youtube-link>", "start": <seconds>, "end": <seconds> }
+  - Response: binary video/mp4 download on success.
+- GET /api/health  reports ffmpeg, yt-dlp, and Node availability.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Requirements for trimming
+- ffmpeg (required)
+- yt-dlp (required for trimming from YouTube links)
 
-## Learn More
+Install via your OS package manager (Homebrew, apt, choco, etc.) or download from official sites.
 
-To learn more about Next.js, take a look at the following resources:
+Current limitations
+- Clip suggestions are not yet transcript-aware (no speech-to-text integration).
+- UI is minimal and intended as a prototype.
+- No authentication or multi-user workflow yet.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Roadmap (next small improvements)
+1. Add transcript-based clip detection (STT + chaptering).
+2. Improve UI to preview clips before downloading.
+3. Add clear server-side checks and user-facing errors when dependencies are missing.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Contributing
+PRs welcome. See the LICENSE file for licensing (MIT).
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+License
+MIT  see the LICENSE file.

@@ -1,6 +1,6 @@
-"use client";
+﻿"use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 
 type Clip = {
   id: string;
@@ -17,8 +17,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
-
-  const sampleVideo = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+  const [embedSrc, setEmbedSrc] = useState<string | null>(null);
 
   function isDirectVideo(u: string) {
     return /\.(mp4|webm|ogg|mov)(\?|$)/i.test(u);
@@ -33,11 +32,12 @@ export default function Home() {
   const ytId = isYouTube ? getYouTubeId(url) : null;
   const youtubeThumbnail = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
 
-  const previewSrc = url && isDirectVideo(url) ? url : sampleVideo;
+  const previewSrc = url && isDirectVideo(url) ? url : undefined;
 
-  const canPlay = !isYouTube && !!previewSrc;
-  const canServerExport = !!url;
-  const canExport = canPlay && (typeof HTMLVideoElement !== "undefined") && typeof (HTMLVideoElement.prototype as any).captureStream !== "undefined";
+  // play available either for direct video preview or YouTube embed
+  const canPlay = (!!previewSrc) || (isYouTube && !!ytId);
+  // export enabled when there's a source URL
+  const canExport = !!url;
 
   const btnBase = (enabled = true) => ({
     padding: "10px 14px",
@@ -73,6 +73,8 @@ export default function Home() {
       if (!res.ok) throw new Error("API error");
       const data = await res.json();
       setClips(data.clips || []);
+      // reset embed when new analysis happens
+      setEmbedSrc(null);
     } catch (err: any) {
       setError(err?.message || "Unknown error");
     } finally {
@@ -81,6 +83,12 @@ export default function Home() {
   }
 
   function playClip(c: Clip) {
+    // If the source is a YouTube link, use embed to play the clip
+    if (isYouTube && ytId) {
+      setEmbedSrc(`https://www.youtube.com/embed/${ytId}?start=${Math.floor(c.start)}&end=${Math.floor(c.end)}&autoplay=1&rel=0&controls=1`);
+      return;
+    }
+
     const v = videoRef.current;
     if (!v) return;
     v.pause();
@@ -98,70 +106,86 @@ export default function Home() {
   }
 
   async function exportClip(c: Clip) {
-    const v = videoRef.current;
-    if (!v) return alert("No preview player available");
+    // If direct video preview is available, use client-side capture (fast, local)
+    if (previewSrc) {
+      const v = videoRef.current;
+      if (!v) return alert("No preview player available");
+      if (exporting) return;
+      if (!('captureStream' in v)) return alert('Recording not supported in this browser');
+
+      setExporting(c.id);
+      const stream = (v as any).captureStream();
+      let mime = 'video/webm';
+      if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) mime = 'video/webm;codecs=vp9';
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size) chunks.push(e.data);
+      };
+
+      recorder.onerror = () => {
+        setExporting(null);
+        alert('Recording failed (CORS or unsupported).');
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mime });
+        const u = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = u;
+        a.download = `${c.id}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(u);
+        setExporting(null);
+      };
+
+      try {
+        v.currentTime = Math.max(0, c.start);
+      } catch (e) {}
+      recorder.start();
+      const onTime = () => {
+        if (v.currentTime >= c.end - 0.12) {
+          v.pause();
+          v.removeEventListener('timeupdate', onTime);
+          try { recorder.stop(); } catch (e) { setExporting(null); }
+        }
+      };
+      v.addEventListener('timeupdate', onTime);
+      v.play().catch((e) => {
+        recorder.stop();
+        setExporting(null);
+        alert('Playback failed: ' + String(e));
+      });
+      return;
+    }
+
+    // Otherwise assume server-side trim (YouTube or non-direct remote)
+    if (!url) return alert("Provide a source URL to use server export.");
     if (exporting) return;
-    if (!('captureStream' in v)) return alert('Recording not supported in this browser');
 
     setExporting(c.id);
-    const stream = (v as any).captureStream();
-    let mime = 'video/webm';
-    if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) mime = 'video/webm;codecs=vp9';
-    const recorder = new MediaRecorder(stream, { mimeType: mime });
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size) chunks.push(e.data);
-    };
-
-    recorder.onerror = () => {
-      setExporting(null);
-      alert('Recording failed (CORS or unsupported).');
-    };
-
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mime });
-      const u = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = u;
-      a.download = `${c.id}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(u);
-      setExporting(null);
-    };
-
-    // start recording just before playback
-    try {
-      v.currentTime = Math.max(0, c.start);
-    } catch (e) {}
-    recorder.start();
-    const onTime = () => {
-      if (v.currentTime >= c.end - 0.12) {
-        v.pause();
-        v.removeEventListener('timeupdate', onTime);
-        try { recorder.stop(); } catch (e) { setExporting(null); }
-      }
-    };
-    v.addEventListener('timeupdate', onTime);
-    v.play().catch((e) => {
-      recorder.stop();
-      setExporting(null);
-      alert('Playback failed: ' + String(e));
-    });
-  }
-
-  async function serverExportClip(c: Clip) {
-    if (!url) return alert("Provide a source URL (direct video URL recommended) to use server export.");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180_000); // 180s
     try {
       const res = await fetch("/api/trim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, start: c.start, end: c.end }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        return alert("Server export failed: " + (err?.error || res.statusText));
+        let msg = res.statusText;
+        try {
+          const err = await res.json();
+          msg = err?.error || err?.detail || JSON.stringify(err);
+        } catch (_) {
+          try { msg = await res.text(); } catch (_) {}
+        }
+        alert("Server export failed: " + msg);
+        return;
       }
       const blob = await res.blob();
       const u = URL.createObjectURL(blob);
@@ -173,7 +197,11 @@ export default function Home() {
       a.remove();
       URL.revokeObjectURL(u);
     } catch (e: any) {
-      alert("Server export error: " + String(e));
+      const isAbort = e?.name === "AbortError";
+      alert("Server export error: " + (isAbort ? "timed out (180s)" : String(e)));
+    } finally {
+      clearTimeout(timeout);
+      setExporting(null);
     }
   }
 
@@ -215,11 +243,15 @@ export default function Home() {
         <section style={{ marginTop: 26 }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 14, color: "#444", marginBottom: 6 }}>Preview player</div>
-            {isYouTube && youtubeThumbnail ? (
+            {embedSrc ? (
+              <div style={{ position: "relative" }}>
+                <iframe src={embedSrc} title="youtube-embed" style={{ width: "100%", height: 360, borderRadius: 10, border: 0 }} allow="autoplay; encrypted-media; picture-in-picture" />
+              </div>
+            ) : isYouTube && youtubeThumbnail ? (
               <div style={{ position: "relative" }}>
                 <img src={youtubeThumbnail} alt="YouTube preview" style={{ width: "100%", borderRadius: 10, objectFit: "cover" }} />
               </div>
-            ) : (
+            ) : previewSrc ? (
               <video
                 ref={videoRef}
                 src={previewSrc}
@@ -227,7 +259,7 @@ export default function Home() {
                 controls
                 style={{ width: "100%", borderRadius: 10, background: "#000" }}
               />
-            )}
+            ) : null}
           </div>
           <h2 style={{ fontSize: 20, margin: "6px 0 12px" }}>Suggested Clips</h2>
           <div style={{ display: "grid", gap: 14 }}>
@@ -237,25 +269,19 @@ export default function Home() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600 }}>{c.title}</div>
                   <div style={{ color: "#666", marginTop: 6 }}>
-                    {formatTime(c.start)} — {formatTime(c.end)} ({c.end - c.start}s)
+                    {formatTime(c.start)}  {formatTime(c.end)} ({c.end - c.start}s)
                   </div>
                   <div style={{ marginTop: 10 }}>
-                    {canServerExport ? (
-                      <a href={url} target="_blank" rel="noreferrer" style={{ marginRight: 12 }}>Open source</a>
+                    {canPlay ? (
+                      <button onClick={() => playClip(c)} disabled={!canPlay} style={smallBtn(canPlay)}>
+                        Play clip
+                      </button>
                     ) : (
-                      <span style={{ marginRight: 12, color: "#999" }}>Open source</span>
+                      <button disabled style={smallBtn(false)}>Play clip</button>
                     )}
 
-                    <button onClick={() => playClip(c)} disabled={!canPlay} style={smallBtn(canPlay)}>
-                      Play clip
-                    </button>
-
                     <button onClick={() => exportClip(c)} disabled={!canExport || !!exporting} style={smallBtn(!(!canExport || !!exporting))}>
-                      {exporting === c.id ? "Exporting…" : "Export"}
-                    </button>
-
-                    <button onClick={() => serverExportClip(c)} disabled={!canServerExport} style={smallBtn(!!canServerExport)}>
-                      Server Export
+                      {exporting === c.id ? "Exporting" : "Export"}
                     </button>
                   </div>
                 </div>
@@ -272,7 +298,7 @@ export default function Home() {
       </p>
 
       <a href="https://ruxsoraxon.uz" style={{ display: "inline-block", marginTop: 18 }}>
-        ← Back to personal site
+         Back to personal site
       </a>
     </main>
   );
