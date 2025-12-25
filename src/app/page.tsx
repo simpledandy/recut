@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 type Clip = {
   id: string;
@@ -16,8 +16,12 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [localObjectUrl, setLocalObjectUrl] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [embedSrc, setEmbedSrc] = useState<string | null>(null);
+  const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
+  const thumbUrlsRef = useRef<string[]>([]);
 
   function isDirectVideo(u: string) {
     return /\.(mp4|webm|ogg|mov)(\?|$)/i.test(u);
@@ -32,7 +36,129 @@ export default function Home() {
   const ytId = isYouTube ? getYouTubeId(url) : null;
   const youtubeThumbnail = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
 
-  const previewSrc = url && isDirectVideo(url) ? url : undefined;
+  const previewSrc = url && (isDirectVideo(url) || (url || "").startsWith("blob:")) ? url : undefined;
+
+  useEffect(() => {
+    return () => {
+      if (localObjectUrl) {
+        try { URL.revokeObjectURL(localObjectUrl); } catch (e) {}
+      }
+    };
+  }, [localObjectUrl]);
+
+  function handleUploadClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    // revoke previous
+    if (localObjectUrl) {
+      try { URL.revokeObjectURL(localObjectUrl); } catch (e) {}
+    }
+    const u = URL.createObjectURL(f);
+    setLocalObjectUrl(u);
+    setUrl(u);
+    setEmbedSrc(null);
+  }
+
+  // generate per-clip thumbnails from the exact start second when possible
+  useEffect(() => {
+    // revoke any previously created blob urls
+    if (thumbUrlsRef.current.length) {
+      for (const u of thumbUrlsRef.current) {
+        try { URL.revokeObjectURL(u); } catch (e) {}
+      }
+      thumbUrlsRef.current = [];
+    }
+
+    if (!clips || !previewSrc) {
+      setThumbMap({});
+      return;
+    }
+
+    if (isYouTube && ytId) {
+      // cannot capture cross-origin YouTube frames in-browser
+      setThumbMap({});
+      return;
+    }
+
+    let cancelled = false;
+    const results: Record<string, string> = {};
+
+    // create a single offscreen video element to sequentially seek and capture frames
+    const v = document.createElement("video");
+    v.crossOrigin = "anonymous";
+    v.preload = "auto";
+    v.muted = true;
+    v.src = previewSrc as string;
+    v.style.position = "fixed";
+    v.style.left = "-9999px";
+    v.style.width = "1px";
+    v.style.height = "1px";
+    document.body.appendChild(v);
+
+    const captureCanvas = document.createElement("canvas");
+
+    const run = async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const onLoaded = () => { v.removeEventListener("error", onErr); resolve(); };
+          const onErr = () => { v.removeEventListener("loadedmetadata", onLoaded); reject(new Error("video load error")); };
+          v.addEventListener("loadedmetadata", onLoaded);
+          v.addEventListener("error", onErr);
+        });
+
+        for (const c of clips) {
+          if (cancelled) break;
+          const seekTime = Math.min(c.start, Math.max(0, v.duration - 0.05));
+          await new Promise<void>((res) => {
+            const onSeeked = () => { v.removeEventListener("seeked", onSeeked); res(); };
+            v.addEventListener("seeked", onSeeked);
+            try { v.currentTime = seekTime; } catch (e) { res(); }
+          });
+
+          try {
+            const cw = v.videoWidth || 320;
+            const ch = v.videoHeight || 180;
+            captureCanvas.width = cw;
+            captureCanvas.height = ch;
+            const ctx = captureCanvas.getContext("2d");
+            if (!ctx) continue;
+            ctx.drawImage(v, 0, 0, cw, ch);
+            const blob = await new Promise<Blob | null>((resolve) => captureCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.8));
+            if (!blob) continue;
+            const obj = URL.createObjectURL(blob);
+            thumbUrlsRef.current.push(obj);
+            results[c.id] = obj;
+            // set intermediate state so UI updates progressively
+            setThumbMap({ ...results });
+          } catch (e) {
+            // ignore individual failures
+          }
+        }
+      } catch (e) {
+        // overall failure: leave results empty
+      }
+    };
+
+    run().finally(() => {
+      try { v.remove(); } catch (e) {}
+    });
+
+    return () => {
+      cancelled = true;
+      try { v.remove(); } catch (e) {}
+      if (thumbUrlsRef.current.length) {
+        for (const u of thumbUrlsRef.current) {
+          try { URL.revokeObjectURL(u); } catch (e) {}
+        }
+        thumbUrlsRef.current = [];
+      }
+      setThumbMap({});
+    };
+  }, [clips, previewSrc, isYouTube, ytId]);
 
   // play available either for direct video preview or YouTube embed
   const canPlay = (!!previewSrc) || (isYouTube && !!ytId);
@@ -217,18 +343,32 @@ export default function Home() {
           Video URL
         </label>
 
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://www.youtube.com/watch?v=... or https://.../sample.mp4"
-          style={{
-            width: "100%",
-            padding: "12px 14px",
-            borderRadius: 10,
-            border: "1px solid #ddd",
-            fontSize: 16,
-          }}
-        />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://www.youtube.com/watch?v=... or https://.../sample.mp4"
+            style={{
+              flex: 1,
+              padding: "12px 14px",
+              borderRadius: 10,
+              border: "1px solid #ddd",
+              fontSize: 16,
+            }}
+          />
+
+          <button type="button" onClick={handleUploadClick} style={smallBtn(true)}>
+            Upload
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            onChange={handleFileChange}
+            style={{ display: "none" }}
+          />
+        </div>
 
         <button disabled={loading} style={{ ...btnBase(!loading), marginTop: 12 }} onClick={analyze}>
           {loading ? "Analyzing..." : "Analyze"}
@@ -265,7 +405,13 @@ export default function Home() {
           <div style={{ display: "grid", gap: 14 }}>
             {clips.map((c) => (
               <div key={c.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-                <img src={c.thumbnail} alt={c.title} width={240} height={135} style={{ borderRadius: 8, objectFit: "cover" }} />
+                <img
+                  src={thumbMap[c.id] || (isYouTube && youtubeThumbnail ? youtubeThumbnail : c.thumbnail)}
+                  alt={c.title}
+                  width={240}
+                  height={135}
+                  style={{ borderRadius: 8, objectFit: "cover" }}
+                />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600 }}>{c.title}</div>
                   <div style={{ color: "#666", marginTop: 6 }}>
@@ -297,9 +443,9 @@ export default function Home() {
         Tip: This demo uses a mocked backend that returns timestamped clips. For a production demo we can integrate transcription and FFmpeg trimming.
       </p>
 
-      <a href="https://ruxsoraxon.uz" style={{ display: "inline-block", marginTop: 18 }}>
+      {/* Back to personal site 
          Back to personal site
-      </a>
+      </a>*/}
     </main>
   );
 }
