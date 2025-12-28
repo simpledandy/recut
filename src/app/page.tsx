@@ -1,14 +1,11 @@
 ﻿"use client";
 
 import { useState, useRef, useEffect } from "react";
-
-type Clip = {
-  id: string;
-  title: string;
-  start: number;
-  end: number;
-  thumbnail: string;
-};
+import type { Clip } from "../types";
+import { isDirectVideo, getYouTubeId } from "../lib/videoUtils";
+import useThumbnails from "../hooks/useThumbnails";
+import PreviewPlayer from "../components/PreviewPlayer";
+import ClipList from "../components/ClipList";
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -20,17 +17,6 @@ export default function Home() {
   const [localObjectUrl, setLocalObjectUrl] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [embedSrc, setEmbedSrc] = useState<string | null>(null);
-  const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
-  const thumbUrlsRef = useRef<string[]>([]);
-
-  function isDirectVideo(u: string) {
-    return /\.(mp4|webm|ogg|mov)(\?|$)/i.test(u);
-  }
-
-  function getYouTubeId(u: string) {
-    const m = u.match(/(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)/);
-    return m ? m[1] : null;
-  }
 
   const isYouTube = /youtube\.com|youtu\.be/.test(url);
   const ytId = isYouTube ? getYouTubeId(url) : null;
@@ -53,7 +39,6 @@ export default function Home() {
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    // revoke previous
     if (localObjectUrl) {
       try { URL.revokeObjectURL(localObjectUrl); } catch (e) {}
     }
@@ -63,106 +48,9 @@ export default function Home() {
     setEmbedSrc(null);
   }
 
-  // generate per-clip thumbnails from the exact start second when possible
-  useEffect(() => {
-    // revoke any previously created blob urls
-    if (thumbUrlsRef.current.length) {
-      for (const u of thumbUrlsRef.current) {
-        try { URL.revokeObjectURL(u); } catch (e) {}
-      }
-      thumbUrlsRef.current = [];
-    }
+  const thumbMap = useThumbnails(clips, previewSrc, isYouTube, ytId);
 
-    if (!clips || !previewSrc) {
-      setThumbMap({});
-      return;
-    }
-
-    if (isYouTube && ytId) {
-      // cannot capture cross-origin YouTube frames in-browser
-      setThumbMap({});
-      return;
-    }
-
-    let cancelled = false;
-    const results: Record<string, string> = {};
-
-    // create a single offscreen video element to sequentially seek and capture frames
-    const v = document.createElement("video");
-    v.crossOrigin = "anonymous";
-    v.preload = "auto";
-    v.muted = true;
-    v.src = previewSrc as string;
-    v.style.position = "fixed";
-    v.style.left = "-9999px";
-    v.style.width = "1px";
-    v.style.height = "1px";
-    document.body.appendChild(v);
-
-    const captureCanvas = document.createElement("canvas");
-
-    const run = async () => {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const onLoaded = () => { v.removeEventListener("error", onErr); resolve(); };
-          const onErr = () => { v.removeEventListener("loadedmetadata", onLoaded); reject(new Error("video load error")); };
-          v.addEventListener("loadedmetadata", onLoaded);
-          v.addEventListener("error", onErr);
-        });
-
-        for (const c of clips) {
-          if (cancelled) break;
-          const seekTime = Math.min(c.start, Math.max(0, v.duration - 0.05));
-          await new Promise<void>((res) => {
-            const onSeeked = () => { v.removeEventListener("seeked", onSeeked); res(); };
-            v.addEventListener("seeked", onSeeked);
-            try { v.currentTime = seekTime; } catch (e) { res(); }
-          });
-
-          try {
-            const cw = v.videoWidth || 320;
-            const ch = v.videoHeight || 180;
-            captureCanvas.width = cw;
-            captureCanvas.height = ch;
-            const ctx = captureCanvas.getContext("2d");
-            if (!ctx) continue;
-            ctx.drawImage(v, 0, 0, cw, ch);
-            const blob = await new Promise<Blob | null>((resolve) => captureCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.8));
-            if (!blob) continue;
-            const obj = URL.createObjectURL(blob);
-            thumbUrlsRef.current.push(obj);
-            results[c.id] = obj;
-            // set intermediate state so UI updates progressively
-            setThumbMap({ ...results });
-          } catch (e) {
-            // ignore individual failures
-          }
-        }
-      } catch (e) {
-        // overall failure: leave results empty
-      }
-    };
-
-    run().finally(() => {
-      try { v.remove(); } catch (e) {}
-    });
-
-    return () => {
-      cancelled = true;
-      try { v.remove(); } catch (e) {}
-      if (thumbUrlsRef.current.length) {
-        for (const u of thumbUrlsRef.current) {
-          try { URL.revokeObjectURL(u); } catch (e) {}
-        }
-        thumbUrlsRef.current = [];
-      }
-      setThumbMap({});
-    };
-  }, [clips, previewSrc, isYouTube, ytId]);
-
-  // play available either for direct video preview or YouTube embed
   const canPlay = (!!previewSrc) || (isYouTube && !!ytId);
-  // export enabled when there's a source URL
   const canExport = !!url;
 
   const btnBase = (enabled = true) => ({
@@ -199,7 +87,6 @@ export default function Home() {
       if (!res.ok) throw new Error("API error");
       const data = await res.json();
       setClips(data.clips || []);
-      // reset embed when new analysis happens
       setEmbedSrc(null);
     } catch (err: any) {
       setError(err?.message || "Unknown error");
@@ -209,7 +96,6 @@ export default function Home() {
   }
 
   function playClip(c: Clip) {
-    // If the source is a YouTube link, use embed to play the clip
     if (isYouTube && ytId) {
       setEmbedSrc(`https://www.youtube.com/embed/${ytId}?start=${Math.floor(c.start)}&end=${Math.floor(c.end)}&autoplay=1&rel=0&controls=1`);
       return;
@@ -232,7 +118,6 @@ export default function Home() {
   }
 
   async function exportClip(c: Clip) {
-    // If direct video preview is available, use client-side capture (fast, local)
     if (previewSrc) {
       const v = videoRef.current;
       if (!v) return alert("No preview player available");
@@ -287,13 +172,12 @@ export default function Home() {
       return;
     }
 
-    // Otherwise assume server-side trim (YouTube or non-direct remote)
     if (!url) return alert("Provide a source URL to use server export.");
     if (exporting) return;
 
     setExporting(c.id);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180_000); // 180s
+    const timeout = setTimeout(() => controller.abort(), 180_000);
     try {
       const res = await fetch("/api/trim", {
         method: "POST",
@@ -381,59 +265,8 @@ export default function Home() {
 
       {clips && clips.length > 0 && (
         <section style={{ marginTop: 26 }}>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 14, color: "#444", marginBottom: 6 }}>Preview player</div>
-            {embedSrc ? (
-              <div style={{ position: "relative" }}>
-                <iframe src={embedSrc} title="youtube-embed" style={{ width: "100%", height: 360, borderRadius: 10, border: 0 }} allow="autoplay; encrypted-media; picture-in-picture" />
-              </div>
-            ) : isYouTube && youtubeThumbnail ? (
-              <div style={{ position: "relative" }}>
-                <img src={youtubeThumbnail} alt="YouTube preview" style={{ width: "100%", borderRadius: 10, objectFit: "cover" }} />
-              </div>
-            ) : previewSrc ? (
-              <video
-                ref={videoRef}
-                src={previewSrc}
-                crossOrigin="anonymous"
-                controls
-                style={{ width: "100%", borderRadius: 10, background: "#000" }}
-              />
-            ) : null}
-          </div>
-          <h2 style={{ fontSize: 20, margin: "6px 0 12px" }}>Suggested Clips</h2>
-          <div style={{ display: "grid", gap: 14 }}>
-            {clips.map((c) => (
-              <div key={c.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-                <img
-                  src={thumbMap[c.id] || (isYouTube && youtubeThumbnail ? youtubeThumbnail : c.thumbnail)}
-                  alt={c.title}
-                  width={240}
-                  height={135}
-                  style={{ borderRadius: 8, objectFit: "cover" }}
-                />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600 }}>{c.title}</div>
-                  <div style={{ color: "#666", marginTop: 6 }}>
-                    {formatTime(c.start)}  {formatTime(c.end)} ({c.end - c.start}s)
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    {canPlay ? (
-                      <button onClick={() => playClip(c)} disabled={!canPlay} style={smallBtn(canPlay)}>
-                        Play clip
-                      </button>
-                    ) : (
-                      <button disabled style={smallBtn(false)}>Play clip</button>
-                    )}
-
-                    <button onClick={() => exportClip(c)} disabled={!canExport || !!exporting} style={smallBtn(!(!canExport || !!exporting))}>
-                      {exporting === c.id ? "Exporting" : "Export"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <PreviewPlayer embedSrc={embedSrc} setEmbedSrc={setEmbedSrc} isYouTube={isYouTube} youtubeThumbnail={youtubeThumbnail} previewSrc={previewSrc} videoRef={videoRef} />
+          <ClipList clips={clips} thumbMap={thumbMap} isYouTube={isYouTube} youtubeThumbnail={youtubeThumbnail} playClip={playClip} exportClip={exportClip} canPlay={canPlay} canExport={canExport} exporting={exporting} />
         </section>
       )}
 
@@ -442,20 +275,7 @@ export default function Home() {
       <p style={{ marginTop: 24, color: "#666" }}>
         Tip: This demo uses a mocked backend that returns timestamped clips. For a production demo we can integrate transcription and FFmpeg trimming.
       </p>
-
-      {/* Back to personal site 
-         Back to personal site
-      </a>*/}
     </main>
   );
 }
 
-function formatTime(s: number) {
-  const mm = Math.floor(s / 60)
-    .toString()
-    .padStart(2, "0");
-  const ss = Math.floor(s % 60)
-    .toString()
-    .padStart(2, "0");
-  return `${mm}:${ss}`;
-}
