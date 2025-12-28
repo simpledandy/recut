@@ -6,6 +6,7 @@ import { isDirectVideo, getYouTubeId } from "../lib/videoUtils";
 import useThumbnails from "../hooks/useThumbnails";
 import PreviewPlayer from "../components/PreviewPlayer";
 import ClipList from "../components/ClipList";
+import { sanitizeFileName } from "../lib/fileUtils";
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -144,7 +145,7 @@ export default function Home() {
         const u = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = u;
-        a.download = `${c.id}.webm`;
+        try { a.download = sanitizeFileName(c.title || c.id, 'webm'); } catch { a.download = `${c.id}.webm`; }
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -201,7 +202,7 @@ export default function Home() {
       const u = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = u;
-      a.download = `${c.id}_server.mp4`;
+      try { a.download = sanitizeFileName(c.title || `${c.id}_server`, 'mp4'); } catch { a.download = `${c.id}_server.mp4`; }
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -217,21 +218,21 @@ export default function Home() {
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "64px 20px", fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 44, margin: 0 }}>RECUT</h1>
+      <h1 style={{ fontSize: 44, margin: 0 }}>RECUT — Quick lesson clips</h1>
       <p style={{ fontSize: 18, lineHeight: 1.6, marginTop: 16 }}>
-        Paste a YouTube link or any video URL. RECUT will suggest a few high-density clips (mocked demo).
+        Upload your lesson video or paste a link and RECUT will suggest short clips you can download and share with students.
       </p>
 
       <div style={{ marginTop: 28, padding: 16, border: "1px solid #eee", borderRadius: 14 }}>
-        <label style={{ display: "block", fontSize: 14, marginBottom: 8, color: "#555" }}>
-          Video URL
+          <label style={{ display: "block", fontSize: 14, marginBottom: 8, color: "#555" }}>
+          Video file or URL
         </label>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=... or https://.../sample.mp4"
+            placeholder="Paste a video URL or upload your lesson file"
             style={{
               flex: 1,
               padding: "12px 14px",
@@ -255,7 +256,7 @@ export default function Home() {
         </div>
 
         <button disabled={loading} style={{ ...btnBase(!loading), marginTop: 12 }} onClick={analyze}>
-          {loading ? "Analyzing..." : "Analyze"}
+          {loading ? "Finding clips..." : "Suggest clips"}
         </button>
       </div>
 
@@ -273,7 +274,7 @@ export default function Home() {
       <div style={{ height: 4 }} />
 
       <p style={{ marginTop: 24, color: "#666" }}>
-        Tip: This demo uses a mocked backend that returns timestamped clips. For a production demo we can integrate transcription and FFmpeg trimming.
+        Tip for educators: Upload or paste your lesson, click "Suggest clips", then review each suggested clip. Click "Play clip" and wait for it to finish playing, then click "Export" to download a trimmed video named with the clip caption.
       </p>
     </main>
   );
